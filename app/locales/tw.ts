@@ -56,6 +56,9 @@ const tw = {
       RefreshTitle: "重新整理標題",
       RefreshToast: "已傳送重新整理標題請求",
     },
+    AttachmentLimitExceeded: "附件数量已达上限",
+    UploadFileError: "檔案處理出錯，請稍後再試",
+    PastedTextAsFile: "已将粘贴的长文本作为文件附件。",
     Commands: {
       new: "新建聊天",
       newm: "從角色範本新建聊天",
@@ -76,7 +79,7 @@ const tw = {
       Masks: "所有角色範本",
       Clear: "清除聊天",
       Settings: "對話設定",
-      UploadImage: "上傳圖片",
+      UploadImage: "上傳檔案",
     },
     Rename: "重新命名對話",
     Typing: "正在輸入…",

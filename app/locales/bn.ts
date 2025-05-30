@@ -56,6 +56,9 @@ const bn: PartialLocaleType = {
       RefreshTitle: "শিরোনাম রিফ্রেশ করুন",
       RefreshToast: "শিরোনাম রিফ্রেশ অনুরোধ পাঠানো হয়েছে",
     },
+    AttachmentLimitExceeded: "Attachment limit exceeded",
+    UploadFileError: "Error processing file(s), please try again.",
+    PastedTextAsFile: "Pasted text has been attached as a file.",
     Commands: {
       new: "নতুন চ্যাট",
       newm: "মাস্ক থেকে নতুন চ্যাট",

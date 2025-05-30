@@ -56,6 +56,9 @@ const vi: PartialLocaleType = {
       RefreshTitle: "Làm mới tiêu đề",
       RefreshToast: "Đã gửi yêu cầu làm mới tiêu đề",
     },
+    AttachmentLimitExceeded: "Attachment limit exceeded",
+    UploadFileError: "Error processing file(s), please try again.",
+    PastedTextAsFile: "Pasted text has been attached as a file.",
     Commands: {
       new: "Tạo cuộc trò chuyện mới",
       newm: "Tạo cuộc trò chuyện từ mặt nạ",

@@ -68,12 +68,12 @@ export const DEFAULT_CONFIG = {
     providerName: "OpenAI" as ServiceProvider,
     temperature: 0.5,
     top_p: 1,
-    max_tokens: 4000,
+    max_tokens: 32000,
     presence_penalty: 0,
     frequency_penalty: 0,
     sendMemory: true,
-    historyMessageCount: 4,
-    compressMessageLengthThreshold: 1000,
+    historyMessageCount: 20,
+    compressMessageLengthThreshold: 20000,
     compressModel: "",
     compressProviderName: "",
     enableInjectSystemPrompts: true,
@@ -145,7 +145,7 @@ export const ModalConfigValidator = {
     return x as ModelType;
   },
   max_tokens(x: number) {
-    return limitNumber(x, 0, 512000, 1024);
+    return limitNumber(x, 0, 1024000, 16384);
   },
   presence_penalty(x: number) {
     return limitNumber(x, -2, 2, 0);
@@ -158,6 +158,12 @@ export const ModalConfigValidator = {
   },
   top_p(x: number) {
     return limitNumber(x, 0, 1, 1);
+  },
+  historyMessageCount(x: number) {
+    return limitNumber(x, 0, 256, 20);
+  },
+  compressMessageLengthThreshold(x: number) {
+    return limitNumber(x, 500, 1024000, 20000);
   },
 };
 

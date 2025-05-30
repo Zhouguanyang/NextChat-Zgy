@@ -56,6 +56,9 @@ const tr: PartialLocaleType = {
       RefreshTitle: "Başlığı Yenile",
       RefreshToast: "Başlık yenileme isteği gönderildi",
     },
+    AttachmentLimitExceeded: "Attachment limit exceeded",
+    UploadFileError: "Error processing file(s), please try again.",
+    PastedTextAsFile: "Pasted text has been attached as a file.",
     Commands: {
       new: "Yeni sohbet",
       newm: "Maske ile yeni sohbet oluştur",

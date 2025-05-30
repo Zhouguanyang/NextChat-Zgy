@@ -56,6 +56,9 @@ const ko: PartialLocaleType = {
       RefreshTitle: "제목 새로고침",
       RefreshToast: "제목 새로고침 요청이 전송되었습니다",
     },
+    AttachmentLimitExceeded: "Attachment limit exceeded",
+    UploadFileError: "Error processing file(s), please try again.",
+    PastedTextAsFile: "Pasted text has been attached as a file.",
     Commands: {
       new: "새 채팅",
       newm: "마스크에서 새 채팅",

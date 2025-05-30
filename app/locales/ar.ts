@@ -56,6 +56,9 @@ const ar: PartialLocaleType = {
       RefreshTitle: "تحديث العنوان",
       RefreshToast: "تم إرسال طلب تحديث العنوان",
     },
+    AttachmentLimitExceeded: "Attachment limit exceeded",
+    UploadFileError: "Error processing file(s), please try again.",
+    PastedTextAsFile: "Pasted text has been attached as a file.",
     Commands: {
       new: "دردشة جديدة",
       newm: "إنشاء دردشة من القناع",

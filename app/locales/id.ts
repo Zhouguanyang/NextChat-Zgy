@@ -56,6 +56,9 @@ const id: PartialLocaleType = {
       RefreshTitle: "Segarkan Judul",
       RefreshToast: "Permintaan penyegaran judul telah dikirim",
     },
+    AttachmentLimitExceeded: "Attachment limit exceeded",
+    UploadFileError: "Error processing file(s), please try again.",
+    PastedTextAsFile: "Pasted text has been attached as a file.",
     Commands: {
       new: "Obrolan Baru",
       newm: "Buat Obrolan Baru dari Masker",

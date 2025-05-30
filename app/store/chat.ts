@@ -54,6 +54,17 @@ export type ChatMessageTool = {
   errorMsg?: string;
 };
 
+// 定义附件对象的类型
+export interface MessageAttachment {
+  type: "image" | "textfile"; // 附件类型
+  name: string; // 文件名
+  url?: string; // 图片的 URL (HTTP 或 Data URL)
+  content?: string; // 文本文件的内容 (主要用于发送给后端，聊天记录中可能不存或存摘要)
+  decoding_error?: boolean; // 文本文件解码是否出错
+  // 你可以根据需要添加更多字段，比如 fileExtension 用于前端渲染图标
+  fileExtension?: string;
+}
+
 export type ChatMessage = RequestMessage & {
   date: string;
   streaming?: boolean;
@@ -63,14 +74,17 @@ export type ChatMessage = RequestMessage & {
   tools?: ChatMessageTool[];
   audio_url?: string;
   isMcpResponse?: boolean;
+  attachments?: MessageAttachment[]; // <--- 新增字段：用于存储附件信息
 };
 
+// createMessage 函数也需要能接受 attachments
 export function createMessage(override: Partial<ChatMessage>): ChatMessage {
   return {
     id: nanoid(),
     date: new Date().toLocaleString(),
     role: "user",
     content: "",
+    // attachments: [], // 可以设置默认值，如果需要的话
     ...override,
   };
 }
@@ -406,30 +420,63 @@ export const useChatStore = createPersistStore(
 
       async onUserInput(
         content: string,
-        attachImages?: string[],
+        attachments?: MessageAttachment[],
         isMcpResponse?: boolean,
       ) {
         const session = get().currentSession();
         const modelConfig = session.mask.modelConfig;
 
-        // MCP Response no need to fill template
         let mContent: string | MultimodalContent[] = isMcpResponse
           ? content
           : fillTemplateWith(content, modelConfig);
 
-        if (!isMcpResponse && attachImages && attachImages.length > 0) {
-          mContent = [
-            ...(content ? [{ type: "text" as const, text: content }] : []),
-            ...attachImages.map((url) => ({
-              type: "image_url" as const,
-              image_url: { url },
-            })),
-          ];
+        // 构建发送给AI模型的内容（包含文件内容）
+        let contentForAI: string | MultimodalContent[] = mContent;
+
+        if (!isMcpResponse && attachments && attachments.length > 0) {
+          const multimodalContents: MultimodalContent[] = [];
+
+          // 如果有用户输入的文本，先添加文本部分
+          if (content) {
+            multimodalContents.push({ type: "text" as const, text: content });
+          }
+
+          // 处理附件 - 只为发送给AI的内容添加文件内容
+          attachments.forEach((att) => {
+            if (att.type === "image" && att.url) {
+              multimodalContents.push({
+                type: "image_url" as const,
+                image_url: { url: att.url },
+              });
+            } else if (att.type === "textfile" && att.content) {
+              // 将文本文件内容添加到发送给AI的内容中
+              multimodalContents.push({
+                type: "text" as const,
+                text: `--- 附件文件: ${att.name} ---\n${att.content}\n--- 文件结束 ---`,
+              });
+            }
+          });
+
+          if (multimodalContents.length > 0) {
+            contentForAI = multimodalContents; // 这是发送给AI的完整内容（包含文件内容）
+          } else if (!content && attachments.length > 0) {
+            contentForAI = "请帮我分析这些附件文件。";
+          }
         }
 
+        // 确保发送给AI的内容不为空
+        if (
+          !contentForAI ||
+          (Array.isArray(contentForAI) && contentForAI.length === 0)
+        ) {
+          contentForAI = content || "请继续对话。";
+        }
+
+        // 创建用户消息 - 只存储用户输入的文本，不包含文件内容
         let userMessage: ChatMessage = createMessage({
           role: "user",
-          content: mContent,
+          content: content || (attachments && attachments.length > 0 ? "" : ""),
+          attachments: attachments,
           isMcpResponse,
         });
 
@@ -437,27 +484,48 @@ export const useChatStore = createPersistStore(
           role: "assistant",
           streaming: true,
           model: modelConfig.model,
+          content: "", // 确保为空字符串
         });
 
-        // get recent messages
         const recentMessages = await get().getMessagesWithMemory();
-        const sendMessages = recentMessages.concat(userMessage);
+        const messageForAI: ChatMessage = {
+          ...userMessage,
+          content: contentForAI,
+        };
+        const sendMessages = recentMessages.concat(messageForAI);
         const messageIndex = session.messages.length + 1;
 
-        // save user's and bot's message
+        // 保存到会话中的消息不包含文件内容，只有用户输入的文本和附件信息
         get().updateTargetSession(session, (session) => {
-          const savedUserMessage = {
-            ...userMessage,
-            content: mContent,
-          };
-          session.messages = session.messages.concat([
-            savedUserMessage,
-            botMessage,
-          ]);
+          session.messages = session.messages.concat([userMessage]);
         });
 
+        // --- 在这里添加日志 ---
+        // 完整输出
+        // console.log("[To LiteLLM] Preparing to send messages:", JSON.parse(JSON.stringify(sendMessages)));
+        // 你可以特别关注 sendMessages 数组中最后一条消息 (即 messageForAI) 的 content 字段
+        const userMessageSentToAI = sendMessages.find(
+          (msg) => msg.id === userMessage.id,
+        );
+        if (userMessageSentToAI) {
+          console.log(
+            "[To LiteLLM] User message content being sent to AI:",
+            userMessageSentToAI.content,
+          );
+        } else {
+          // 如果是多轮对话的上下文，用户消息可能不是最后一条，但 messageForAI 就是当前用户回合的完整内容
+          console.log(
+            "[To LiteLLM] Current turn's full content for AI (from messageForAI):",
+            messageForAI.content,
+          );
+        }
+        // --- 日志添加结束 ---
+
         const api: ClientApi = getClientApi(modelConfig.providerName);
-        // make request
+        get().updateTargetSession(session, (session) => {
+          session.messages = session.messages.concat([botMessage]);
+        });
+
         api.llm.chat({
           messages: sendMessages,
           config: { ...modelConfig, stream: true },
@@ -479,6 +547,7 @@ export const useChatStore = createPersistStore(
             }
             ChatControllerPool.remove(session.id, botMessage.id);
           },
+
           onBeforeTool(tool: ChatMessageTool) {
             (botMessage.tools = botMessage?.tools || []).push(tool);
             get().updateTargetSession(session, (session) => {
@@ -517,7 +586,6 @@ export const useChatStore = createPersistStore(
             console.error("[Chat] failed ", error);
           },
           onController(controller) {
-            // collect controller for stop/retry
             ChatControllerPool.addController(
               session.id,
               botMessage.id ?? messageIndex,
@@ -543,13 +611,14 @@ export const useChatStore = createPersistStore(
         const session = get().currentSession();
         const modelConfig = session.mask.modelConfig;
         const clearContextIndex = session.clearContextIndex ?? 0;
-        const messages = session.messages.slice();
-        const totalMessageCount = session.messages.length;
+        // 创建消息的深拷贝副本，以避免直接修改 store 中的状态
+        const messages = JSON.parse(
+          JSON.stringify(session.messages),
+        ) as ChatMessage[];
+        const totalMessageCount = messages.length;
 
-        // in-context prompts
         const contextPrompts = session.mask.context.slice();
 
-        // system prompts, to get close to OpenAI Web ChatGPT
         const shouldInjectSystemPrompts =
           modelConfig.enableInjectSystemPrompts &&
           (session.mask.modelConfig.model.startsWith("gpt-") ||
@@ -581,13 +650,9 @@ export const useChatStore = createPersistStore(
         }
 
         if (shouldInjectSystemPrompts || mcpEnabled) {
-          console.log(
-            "[Global System Prompt] ",
-            systemPrompts.at(0)?.content ?? "empty",
-          );
+          console.log("[Global System Prompt] mcp is Enabled");
         }
         const memoryPrompt = get().getMemoryPrompt();
-        // long term memory
         const shouldSendLongTermMemory =
           modelConfig.sendMemory &&
           session.memoryPrompt &&
@@ -597,38 +662,84 @@ export const useChatStore = createPersistStore(
           shouldSendLongTermMemory && memoryPrompt ? [memoryPrompt] : [];
         const longTermMemoryStartIndex = session.lastSummarizeIndex;
 
-        // short term memory
         const shortTermMemoryStartIndex = Math.max(
           0,
           totalMessageCount - modelConfig.historyMessageCount,
         );
 
-        // lets concat send messages, including 4 parts:
-        // 0. system prompt: to get close to OpenAI Web ChatGPT
-        // 1. long term memory: summarized memory messages
-        // 2. pre-defined in-context prompts
-        // 3. short term memory: latest n messages
-        // 4. newest input message
         const memoryStartIndex = shouldSendLongTermMemory
           ? Math.min(longTermMemoryStartIndex, shortTermMemoryStartIndex)
           : shortTermMemoryStartIndex;
-        // and if user has cleared history messages, we should exclude the memory too.
         const contextStartIndex = Math.max(clearContextIndex, memoryStartIndex);
         const maxTokenThreshold = modelConfig.max_tokens;
 
-        // get recent messages as much as possible
-        const reversedRecentMessages = [];
+        const reversedRecentMessages: ChatMessage[] = []; // 明确类型
         for (
           let i = totalMessageCount - 1, tokenCount = 0;
           i >= contextStartIndex && tokenCount < maxTokenThreshold;
           i -= 1
         ) {
-          const msg = messages[i];
-          if (!msg || msg.isError) continue;
-          tokenCount += estimateTokenLength(getMessageTextContent(msg));
-          reversedRecentMessages.push(msg);
+          const originalMsg = messages[i];
+          if (!originalMsg || originalMsg.isError) continue;
+
+          // --- 为用户消息整合附件内容到其 content 字段 (仅为发送给模型的副本) ---
+          let contentForModel = getMessageTextContent(originalMsg); // 获取原始文本内容
+
+          if (
+            originalMsg.role === "user" &&
+            originalMsg.attachments &&
+            originalMsg.attachments.length > 0
+          ) {
+            let attachmentsText = "";
+            originalMsg.attachments.forEach((att) => {
+              if (
+                att.type === "textfile" &&
+                att.content &&
+                !att.decoding_error
+              ) {
+                // 如果附件是文本文件且有内容且没有解码错误
+                attachmentsText += `\n\n--- 附件文件: ${att.name} ---\n${att.content}\n--- 文件结束 ---`;
+              } else if (att.type === "image" && att.url) {
+                // 如果是图片，并且模型支持通过文本描述图片URL，可以在这里添加
+                // 例如: attachmentsText += `\n[图片: ${att.name || 'image'}]`;
+                // 或者如果模型能直接处理 image_url，则不需要在这里转为文本
+                // 当前的 getMessageTextContent 应该能处理多模态内容中的图片URL文本部分
+              }
+            });
+
+            // 将附件文本追加到原始文本内容后面
+            // 如果原始文本内容为空，则直接使用附件文本 (去掉可能的前导换行)
+            if (
+              contentForModel.trim() === "" &&
+              attachmentsText.trim() !== ""
+            ) {
+              contentForModel = attachmentsText.trimStart();
+            } else if (attachmentsText.trim() !== "") {
+              contentForModel += attachmentsText;
+            }
+          }
+
+          // 使用整合后的 contentForModel 计算 token 和添加到列表
+          // 注意：如果原始消息的 content 是 MultimodalContent[]，这里将其简化为 string
+          // 如果模型期望严格的 MultimodalContent[] 结构，这里的处理需要更复杂
+          const msgForModel: ChatMessage = {
+            ...originalMsg,
+            content: contentForModel, // 使用整合了附件文本的 content
+          };
+
+          // 重新计算 token 时，要用整合了附件文本的 contentForModel
+          const currentMsgTokenLength = estimateTokenLength(contentForModel);
+          if (
+            tokenCount + currentMsgTokenLength > maxTokenThreshold &&
+            reversedRecentMessages.length > 0
+          ) {
+            // 如果加上这条消息就超限了，并且已经有一些消息了，就不加这条了
+            break;
+          }
+          tokenCount += currentMsgTokenLength;
+          reversedRecentMessages.push(msgForModel); // 推入修改过 content 的消息副本
         }
-        // concat all messages
+
         const recentMessages = [
           ...systemPrompts,
           ...longTermMemoryPrompts,
@@ -748,12 +859,12 @@ export const useChatStore = createPersistStore(
 
         const lastSummarizeIndex = session.messages.length;
 
-        console.log(
-          "[Chat History] ",
-          toBeSummarizedMsgs,
-          historyMsgLength,
-          modelConfig.compressMessageLengthThreshold,
-        );
+        // console.log(
+        //   "[Chat History] ",
+        //   toBeSummarizedMsgs,
+        //   historyMsgLength,
+        //   modelConfig.compressMessageLengthThreshold,
+        // );
 
         if (
           historyMsgLength > modelConfig.compressMessageLengthThreshold &&

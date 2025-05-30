@@ -29,16 +29,17 @@ export function IconButton(props: {
         {
           [styles.border]: props.bordered,
           [styles.shadow]: props.shadow,
+          [styles.disabled]: props.disabled,
         },
         styles[props.type ?? ""],
         props.className,
       )}
-      onClick={props.onClick}
+      onClick={props.disabled ? undefined : props.onClick} // <--- 关键修改：disabled 时不执行 onClick
       title={props.title}
       disabled={props.disabled}
       role="button"
-      tabIndex={props.tabIndex}
-      autoFocus={props.autoFocus}
+      tabIndex={props.disabled ? -1 : props.tabIndex} // <--- 可选：disabled 时设置 tabIndex 为 -1
+      autoFocus={props.disabled ? false : props.autoFocus} // <--- 可选：disabled 时不自动聚焦
       style={props.style}
       aria-label={props.aria}
     >

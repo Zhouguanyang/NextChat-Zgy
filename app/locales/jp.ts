@@ -56,6 +56,9 @@ const jp: PartialLocaleType = {
       RefreshTitle: "タイトルを更新",
       RefreshToast: "タイトル更新リクエストが送信されました",
     },
+    AttachmentLimitExceeded: "Attachment limit exceeded",
+    UploadFileError: "Error processing file(s), please try again.",
+    PastedTextAsFile: "Pasted text has been attached as a file.",
     Commands: {
       new: "新しいチャット",
       newm: "マスクから新しいチャット",

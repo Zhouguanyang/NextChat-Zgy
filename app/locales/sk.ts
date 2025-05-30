@@ -57,6 +57,9 @@ const sk: PartialLocaleType = {
       RefreshTitle: "Obnoviť názov",
       RefreshToast: "Požiadavka na obnovenie názvu bola odoslaná",
     },
+    AttachmentLimitExceeded: "Attachment limit exceeded",
+    UploadFileError: "Error processing file(s), please try again.",
+    PastedTextAsFile: "Pasted text has been attached as a file.",
     Commands: {
       new: "Začať nový chat",
       newm: "Začať nový chat s maskou",

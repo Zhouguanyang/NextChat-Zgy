@@ -195,19 +195,22 @@ export function ModelConfigList(props: {
         title={Locale.Settings.HistoryCount.Title}
         subTitle={Locale.Settings.HistoryCount.SubTitle}
       >
-        <InputRange
-          aria={Locale.Settings.HistoryCount.Title}
-          title={props.modelConfig.historyMessageCount.toString()}
-          value={props.modelConfig.historyMessageCount}
+        <input
+          aria-label={Locale.Settings.HistoryCount.Title}
+          type="number"
           min="0"
-          max="64"
-          step="1"
+          max="256"
+          value={props.modelConfig.historyMessageCount}
           onChange={(e) =>
             props.updateConfig(
-              (config) => (config.historyMessageCount = e.target.valueAsNumber),
+              (config) =>
+                (config.historyMessageCount =
+                  ModalConfigValidator.historyMessageCount(
+                    e.currentTarget.valueAsNumber,
+                  )),
             )
           }
-        ></InputRange>
+        ></input>
       </ListItem>
 
       <ListItem

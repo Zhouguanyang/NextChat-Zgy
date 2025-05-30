@@ -56,6 +56,9 @@ const ru: PartialLocaleType = {
       RefreshTitle: "Обновить заголовок",
       RefreshToast: "Запрос на обновление заголовка отправлен",
     },
+    AttachmentLimitExceeded: "Attachment limit exceeded",
+    UploadFileError: "Error processing file(s), please try again.",
+    PastedTextAsFile: "Pasted text has been attached as a file.",
     Commands: {
       new: "Новый чат",
       newm: "Создать чат из маски",

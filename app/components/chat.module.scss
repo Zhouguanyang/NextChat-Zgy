@@ -8,6 +8,7 @@
 }
 
 .attach-image {
+  position: relative;
   cursor: default;
   width: 64px;
   height: 64px;
@@ -19,6 +20,14 @@
   background-color: var(--white);
 
   .attach-image-mask {
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1;
+    // background-color: rgba(0, 0, 0, 0.05); // 从这里移除
     width: 100%;
     height: 100%;
     opacity: 0;
@@ -27,9 +36,13 @@
 
   .attach-image-mask:hover {
     opacity: 1;
+    background-color: rgba(0, 0, 0, 0.05); // 在 hover 时添加背景色
   }
 
   .delete-image {
+    position: absolute; // 新增此行，确保 top 和 right 生效
+    top: 5px;
+    right: 5px;
     width: 24px;
     height: 24px;
     cursor: pointer;
@@ -37,7 +50,6 @@
     align-items: center;
     justify-content: center;
     border-radius: 5px;
-    float: right;
     background-color: var(--white);
   }
 }
@@ -235,12 +247,10 @@
 
   animation: slide-in ease 0.3s;
 
-  $linear: linear-gradient(
-    to right,
-    rgba(0, 0, 0, 0),
-    rgba(0, 0, 0, 1),
-    rgba(0, 0, 0, 0)
-  );
+  $linear: linear-gradient(to right,
+      rgba(0, 0, 0, 0),
+      rgba(0, 0, 0, 1),
+      rgba(0, 0, 0, 0));
   mask-image: $linear;
 
   @mixin show {
@@ -379,7 +389,7 @@
   }
 }
 
-.chat-message-user > .chat-message-container {
+.chat-message-user>.chat-message-container {
   align-items: flex-end;
 }
 
@@ -424,9 +434,11 @@
   color: #aaa;
   line-height: 1.5;
   margin-top: 5px;
+
   .chat-message-tool {
     display: flex;
     align-items: end;
+
     svg {
       margin-left: 5px;
       margin-right: 5px;
@@ -463,8 +475,10 @@
   user-select: text;
   word-break: break-word;
   box-sizing: border-box;
+
   audio {
-    height: 30px; /* 调整高度 */
+    height: 30px;
+    /* 调整高度 */
   }
 }
 
@@ -510,13 +524,8 @@
 }
 
 @media screen and (min-width: 600px) {
-  $max-image-width: calc(
-    calc(1200px - var(--sidebar-width)) / 3 * 2 / var(--image-count)
-  );
-  $image-width: calc(
-    calc(var(--window-width) - var(--sidebar-width)) / 3 * 2 /
-      var(--image-count)
-  );
+  $max-image-width: calc(calc(1200px - var(--sidebar-width)) / 3 * 2 / var(--image-count));
+  $image-width: calc(calc(var(--window-width) - var(--sidebar-width)) / 3 * 2 / var(--image-count));
 
   .chat-message-item-image-multi {
     width: $image-width;
@@ -544,7 +553,7 @@
   z-index: 1;
 }
 
-.chat-message-user > .chat-message-container > .chat-message-item {
+.chat-message-user>.chat-message-container>.chat-message-item {
   background-color: var(--second);
 
   &:hover {
@@ -655,8 +664,7 @@
   min-height: 68px;
 }
 
-.chat-input:focus {
-}
+.chat-input:focus {}
 
 .chat-input-send {
   background-color: var(--primary);
@@ -731,6 +739,7 @@
   width: 100%;
   position: relative;
   overflow: hidden;
+
   .chat-body-container {
     height: 100%;
     display: flex;
@@ -738,6 +747,7 @@
     flex: 1;
     width: 100%;
   }
+
   .chat-side-panel {
     position: absolute;
     inset: 0;
@@ -746,8 +756,79 @@
     z-index: 10;
     transform: translateX(100%);
     transition: all ease 0.3s;
+
     &-show {
       transform: translateX(0);
     }
   }
+}
+
+.text-file-preview {
+  display: flex;
+  flex-direction: column;   // 保持：图标和文件名垂直排列
+  align-items: center;      // 保持：水平居中对齐内部元素
+  justify-content: center;  // 保持：垂直居中对齐内部元素（在64x64的框内）
+  padding: 5px;
+  box-sizing: border-box;
+  text-align: center;       // 确保文本本身也是居中的
+  overflow: hidden;         // 保持：防止内容溢出预览框
+  height: 100%;             // 保持：填充父容器 .attach-image 的高度
+  width: 100%;              // 保持：填充父容器 .attach-image 的宽度
+  // background-color: var(--chat-input-bg); // 可选，如果需要背景色
+  border-radius: inherit;   // 保持
+
+  svg { // 或者你用来渲染图标的组件的选择器
+    width: 30px;            // 图标宽度，根据你的图标调整
+    height: 30px;           // 图标高度
+    margin-bottom: 5px;     // 图标和文件名之间的间距
+    color: var(--icon-color, #666); // 图标颜色，确保有默认值
+    flex-shrink: 0;         // 防止图标在空间不足时被压缩
+  }
+}
+
+.text-file-name {
+  font-size: 10px;          // 文件名文字大小，可以适当调整
+  color: var(--text-color, #333); // 文件名颜色，确保有默认值
+  width: 100%;              // 占据可用宽度，以便计算溢出
+  padding: 0 3px;           // 文件名左右留一点空隙，避免紧贴边框
+  box-sizing: border-box;
+  text-align: center;       // 确保文本内容居中
+
+  // --- 实现单行文本溢出显示省略号的关键 ---
+  white-space: nowrap;      // 1. 防止文本换行
+  overflow: hidden;         // 2. 隐藏超出容器的部分
+  text-overflow: ellipsis;  // 3. 对隐藏的部分显示省略号
+
+  // 移除或注释掉以下可能冲突的属性：
+  // word-break: break-all;  // 因为我们不希望在任何地方断开，而是用省略号
+  // max-height: 2.4em;      // 因为我们强制单行
+  // line-height: 1.2em;     // 对于单行不是必需的，但如果想微调垂直对齐可以保留或调整
+}
+
+.chat-message-attachment-preview {
+  display: flex;
+  align-items: center;
+  background-color: var(--chat-input-bg, #f0f0f0); // 与输入框背景类似或自定义
+  border: 1px solid var(--border-color-light, #e0e0e0);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-top: 8px;
+  max-width: 250px; // 限制最大宽度
+  cursor: default; // 或 pointer 如果你想让它可以点击下载
+
+  svg { // 图标样式
+    width: 20px; // 根据你的图标调整
+    height: 20px;
+    margin-right: 8px;
+    color: var(--icon-color, #555);
+    flex-shrink: 0;
+  }
+}
+
+.chat-message-attachment-name {
+  font-size: 13px; // 调整字体大小
+  color: var(--text-color-main, #333);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

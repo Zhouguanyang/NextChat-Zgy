@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="16" height="16" fill="none" viewBox="0 0 16 16">
+  <defs>
+    <rect id="path_0" width="16" height="16" x="0" y="0"/>
+  </defs>
+  <g opacity="1" transform="translate(0 0) rotate(0 8 8)">
+    <mask id="bg-mask-0" fill="#fff">
+      <use xlink:href="#path_0"/>
+    </mask>
+    <g mask="url(#bg-mask-0)">
+      <!-- 文件夹主体 -->
+      <path id="folder-body" 
+        style="stroke:#333;stroke-width:1.3333333333333333;stroke-opacity:1;stroke-dasharray:0 0;fill:none" 
+        d="M2,4L2,12.67C2,13.4 2.6,14 3.33,14L12.67,14C13.4,14 14,13.4 14,12.67L14,5.33C14,4.6 13.4,4 12.67,4L8,4L6.67,2L3.33,2C2.6,2 2,2.6 2,3.33L2,4Z" 
+        transform="translate(0 0) rotate(0 8 8)"/>
+      <!-- 文件夹标签分隔线 -->
+      <path id="folder-tab" 
+        style="stroke:#333;stroke-width:1.3333333333333333;stroke-opacity:1;stroke-dasharray:0 0;fill:none" 
+        d="M2,5.33L14,5.33" 
+        transform="translate(0 0) rotate(0 8 8)"/>
+    </g>
+  </g>
+</svg>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="16" height="16" fill="none" viewBox="0 0 16 16">
+  <defs>
+    <rect id="path_0" width="16" height="16" x="0" y="0"/>
+  </defs>
+  <g opacity="1" transform="translate(0 0) rotate(0 8 8)">
+    <mask id="bg-mask-0" fill="#fff">
+      <use xlink:href="#path_0"/>
+    </mask>
+    <g mask="url(#bg-mask-0)">
+      <!-- 文件夹主体 -->
+      <path id="folder-body" 
+        style="stroke:#333;stroke-width:1.3333333333333333;stroke-opacity:1;stroke-dasharray:0 0;fill:none" 
+        d="M2,4L2,12.67C2,13.4 2.6,14 3.33,14L12.67,14C13.4,14 14,13.4 14,12.67L14,5.33C14,4.6 13.4,4 12.67,4L8,4L6.67,2L3.33,2C2.6,2 2,2.6 2,3.33L2,4Z" 
+        transform="translate(0 0) rotate(0 8 8)"/>
+      <!-- 文件夹标签分隔线 -->
+      <path id="folder-tab" 
+        style="stroke:#333;stroke-width:1.3333333333333333;stroke-opacity:1;stroke-dasharray:0 0;fill:none" 
+        d="M2,5.33L14,5.33" 
+        transform="translate(0 0) rotate(0 8 8)"/>
+    </g>
+  </g>
+</svg>

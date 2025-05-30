@@ -56,6 +56,9 @@ const pt: PartialLocaleType = {
       RefreshTitle: "Atualizar Título",
       RefreshToast: "Solicitação de atualização de título enviada",
     },
+    AttachmentLimitExceeded: "Attachment limit exceeded",
+    UploadFileError: "Error processing file(s), please try again.",
+    PastedTextAsFile: "Pasted text has been attached as a file.",
     Commands: {
       new: "Iniciar um novo chat",
       newm: "Iniciar um novo chat com máscara",

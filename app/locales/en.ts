@@ -60,6 +60,9 @@ const en: LocaleType = {
       Speech: "Play",
       StopSpeech: "Stop",
     },
+    AttachmentLimitExceeded: "Attachment limit exceeded",
+    UploadFileError: "Error processing file(s), please try again.",
+    PastedTextAsFile: "Pasted text has been attached as a file.",
     Commands: {
       new: "Start a new chat",
       newm: "Start a new chat with mask",
@@ -81,7 +84,7 @@ const en: LocaleType = {
       Masks: "Masks",
       Clear: "Clear Context",
       Settings: "Settings",
-      UploadImage: "Upload Images",
+      UploadImage: "Upload Files",
     },
     Rename: "Rename Chat",
     Typing: "Typing…",

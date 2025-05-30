@@ -33,8 +33,8 @@ import PinIcon from "../icons/pin.svg";
 import ConfirmIcon from "../icons/confirm.svg";
 import CloseIcon from "../icons/close.svg";
 import CancelIcon from "../icons/cancel.svg";
-import ImageIcon from "../icons/image.svg";
-
+import FileTextIcon from "../icons/file-text-icon.svg";
+import FolderIcon from "../icons/folder-icon.svg";
 import LightIcon from "../icons/light.svg";
 import DarkIcon from "../icons/dark.svg";
 import AutoIcon from "../icons/auto.svg";
@@ -60,6 +60,7 @@ import {
   useAppConfig,
   useChatStore,
   usePluginStore,
+  type MessageAttachment,
 } from "../store";
 
 import {
@@ -80,6 +81,7 @@ import {
 import { uploadImage as uploadImageRemote } from "@/app/utils/chat";
 
 import dynamic from "next/dynamic";
+import * as XLSX from "xlsx";
 
 import { ChatControllerPool } from "../client/controller";
 import { DalleQuality, DalleStyle, ModelSize } from "../typing";
@@ -625,7 +627,7 @@ export function ChatActions(props: {
           <ChatAction
             onClick={props.uploadImage}
             text={Locale.Chat.InputActions.UploadImage}
-            icon={props.uploading ? <LoadingButtonIcon /> : <ImageIcon />}
+            icon={props.uploading ? <LoadingButtonIcon /> : <FolderIcon />}
           />
         )}
         <ChatAction
@@ -1000,6 +1002,7 @@ function _Chat() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [userInput, setUserInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const { submitKey, shouldSubmit } = useSubmitHandler();
   const scrollRef = useRef<HTMLDivElement>(null);
   const isScrolledToBottom = scrollRef?.current
@@ -1102,8 +1105,72 @@ function _Chat() {
     }
   };
 
+  // 新的辅助函数，用于准备附件数据
+  const prepareAttachmentsForBackend = (
+    attachmentsDataUrls: string[],
+  ): MessageAttachment[] => {
+    const processedAttachments: MessageAttachment[] = [];
+
+    for (const dataUrl of attachmentsDataUrls) {
+      const { isImage, name, url } = getAttachmentInfo(dataUrl); // 使用我们定义的 getAttachmentInfo
+
+      if (isImage) {
+        processedAttachments.push({
+          type: "image",
+          name: name,
+          url: url,
+        });
+      } else {
+        let textContent = "";
+        let errorDecoding = false;
+
+        if (url.startsWith("data:")) {
+          try {
+            const base64Data = url.substring(url.indexOf(",") + 1);
+            const binaryString = atob(base64Data);
+            const len = binaryString.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+              bytes[i] = binaryString.charCodeAt(i);
+            }
+            const decoder = new TextDecoder("utf-8");
+            textContent = decoder.decode(bytes);
+          } catch (error) {
+            console.error("Error decoding file content as text:", name, error);
+            textContent = `[Error decoding content for file: ${name}. Reason: ${
+              (error as Error).message
+            }]`;
+            errorDecoding = true;
+          }
+        } else {
+          console.warn(
+            "Non-image, non-data URL attachment found. Sending URL as content:",
+            name,
+            url,
+          );
+          textContent = `[File content not directly available, URL: ${url}]`;
+        }
+
+        processedAttachments.push({
+          type: "textfile",
+          name: name,
+          content: textContent,
+          decoding_error: errorDecoding,
+        });
+      }
+    }
+    return processedAttachments;
+  };
+
   const doSubmit = (userInput: string) => {
+    // --- 在函数开头立即检查 isSubmit 状态 ---
+    if (isSubmitting) {
+      console.log("[doSubmit] Already submitting, ignoring click");
+      return;
+    }
+
     if (userInput.trim() === "" && isEmpty(attachImages)) return;
+
     const matchCommand = chatCommands.match(userInput);
     if (matchCommand.matched) {
       setUserInput("");
@@ -1111,16 +1178,36 @@ function _Chat() {
       matchCommand.invoke();
       return;
     }
-    setIsLoading(true);
+
+    console.log("[doSubmit] Starting submission, setting isLoading to true");
+    setIsSubmitting(true);
+
+    // 使用新的辅助函数处理附件
+    const processedAttachments = prepareAttachmentsForBackend(attachImages);
+
     chatStore
-      .onUserInput(userInput, attachImages)
-      .then(() => setIsLoading(false));
-    setAttachImages([]);
-    chatStore.setLastInput(userInput);
-    setUserInput("");
-    setPromptHints([]);
-    if (!isMobileScreen) inputRef.current?.focus();
-    setAutoScroll(true);
+      .onUserInput(userInput, processedAttachments)
+      .then(() => {
+        console.log("[doSubmit] onUserInput completed successfully");
+        // onUserInput 完成后再处理后续逻辑
+        setAttachImages([]);
+        chatStore.setLastInput(userInput);
+        setUserInput("");
+        setPromptHints([]);
+        if (!isMobileScreen) inputRef.current?.focus();
+        setAutoScroll(true);
+      })
+      .catch((error) => {
+        console.error("Error in doSubmit:", error);
+        setAttachImages([]);
+        setUserInput("");
+        setPromptHints([]);
+        //showToast(Locale.Chat.SendError || "Failed to send message.");
+      })
+      .finally(() => {
+        console.log("[doSubmit] Setting isLoading to false");
+        setIsSubmitting(false);
+      });
   };
 
   const onPromptSelect = (prompt: RenderPrompt) => {
@@ -1187,6 +1274,11 @@ function _Chat() {
       return;
     }
     if (shouldSubmit(e) && promptHints.length === 0) {
+      if (isSubmitting) {
+        // <--- 使用 isSubmitting 检查
+        e.preventDefault();
+        return;
+      }
       doSubmit(userInput);
       e.preventDefault();
     }
@@ -1215,12 +1307,6 @@ function _Chat() {
   };
 
   const onResend = (message: ChatMessage) => {
-    // when it is resending a message
-    // 1. for a user's message, find the next bot response
-    // 2. for a bot's message, find the last user's input
-    // 3. delete original user input and bot's message
-    // 4. resend the user's input
-
     const resendingIndex = session.messages.findIndex(
       (m) => m.id === message.id,
     );
@@ -1234,7 +1320,6 @@ function _Chat() {
     let botMessage: ChatMessage | undefined;
 
     if (message.role === "assistant") {
-      // if it is resending a bot's message, find the user input for it
       botMessage = message;
       for (let i = resendingIndex; i >= 0; i -= 1) {
         if (session.messages[i].role === "user") {
@@ -1243,7 +1328,6 @@ function _Chat() {
         }
       }
     } else if (message.role === "user") {
-      // if it is resending a user's input, find the bot's response
       userMessage = message;
       for (let i = resendingIndex; i < session.messages.length; i += 1) {
         if (session.messages[i].role === "assistant") {
@@ -1254,19 +1338,86 @@ function _Chat() {
     }
 
     if (userMessage === undefined) {
-      console.error("[Chat] failed to resend", message);
+      console.error(
+        "[Chat] failed to resend, user message not found for",
+        message,
+      );
       return;
     }
 
     // delete the original messages
     deleteMessage(userMessage.id);
-    deleteMessage(botMessage?.id);
+    if (botMessage) {
+      deleteMessage(botMessage.id);
+    }
 
-    // resend the message
     setIsLoading(true);
     const textContent = getMessageTextContent(userMessage);
-    const images = getMessageImages(userMessage);
-    chatStore.onUserInput(textContent, images).then(() => setIsLoading(false));
+
+    let attachmentsForResend: MessageAttachment[] = [];
+
+    if (userMessage.attachments && userMessage.attachments.length > 0) {
+      // 如果用户消息中已经有 attachments 字段，直接使用它
+      attachmentsForResend = [...userMessage.attachments]; // 创建副本，避免引用问题
+      console.log(
+        "[onResend] Using existing attachments from userMessage:",
+        attachmentsForResend,
+      );
+    } else {
+      // 回退逻辑：如果没有 attachments 字段，尝试从 getMessageImages 获取图片
+      const imageUrls = getMessageImages(userMessage);
+      if (imageUrls.length > 0) {
+        attachmentsForResend = imageUrls.map((url) => {
+          let name = "image_attachment";
+          let fileExtension = "";
+
+          try {
+            const urlPath = new URL(url).pathname;
+            const parts = urlPath.split("/");
+            const potentialName = decodeURIComponent(parts[parts.length - 1]);
+            if (potentialName) {
+              name = potentialName;
+              fileExtension = name
+                .substring(name.lastIndexOf(".") + 1)
+                .toLowerCase();
+            }
+          } catch (e) {
+            console.warn(
+              "[onResend] Failed to parse image URL for name:",
+              url,
+              e,
+            );
+          }
+
+          return {
+            type: "image" as const,
+            name: name,
+            url: url,
+            fileExtension: fileExtension,
+          };
+        });
+        console.log(
+          "[onResend] Created attachments from getMessageImages:",
+          attachmentsForResend,
+        );
+      }
+    }
+
+    console.log(
+      "[onResend] Final attachments for resend:",
+      attachmentsForResend,
+    );
+
+    // 调用 onUserInput，传递完整的附件信息
+    chatStore
+      .onUserInput(textContent, attachmentsForResend)
+      .then(() => setIsLoading(false))
+      .catch((err) => {
+        console.error("Error during onResend -> onUserInput:", err);
+        setIsLoading(false);
+        // showToast(Locale.Chat.ResendError || "Failed to resend message.");
+      });
+
     inputRef.current?.focus();
   };
 
@@ -1509,92 +1660,755 @@ function _Chat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 代码检测函数
+  const detectCodeLanguage = (text: string): string | null => {
+    // 检测各种编程语言的特征
+    const languagePatterns: Record<string, RegExp> = {
+      // 明确类型
+      javascript:
+        /(?:function\s+\w+|const\s+\w+\s*=|let\s+\w+\s*=|var\s+\w+\s*=|\.then\(|\.catch\(|console\.log|document\.|window\.|=>)/i,
+      typescript:
+        /(?:interface\s+\w+|type\s+\w+\s*=|enum\s+\w+|export\s+(?:interface|type|enum)|:\s*string|:\s*number|:\s*boolean)/i,
+      python:
+        /(?:def\s+\w+|class\s+\w+|import\s+\w+|from\s+\w+\s+import|print\(|if\s+__name__\s*==)/i, // 移除了 .py$
+      java: /(?:public\s+class|private\s+\w+|public\s+static\s+void\s+main|System\.out\.println|@Override|extends\s+\w+)/i,
+      cpp: /(?:#include\s*<|std::|cout\s*<<|cin\s*>>|nullptr|class\s+\w+.*{|public:|private:|protected:)/i,
+      csharp:
+        /(?:using\s+System|public\s+class\s+\w+|Console\.WriteLine|namespace\s+\w+|var\s+\w+\s*=.*new)/i,
+      html: /(?:<\/?\w+(?:\s+\w+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s'">=]+))?)*\s*\/?>|<!DOCTYPE|<html|<head|<body)/i,
+      css: /(?:\w+\s*{\s*[\w-]+\s*:\s*[^}]+}|@media\s*\([^)]+\)|\.[\w-]+\s*{|#[\w-]+\s*{)/i,
+      sql: /(?:SELECT\s+.*\s+FROM|INSERT\s+INTO|UPDATE\s+.*\s+SET|DELETE\s+FROM|CREATE\s+TABLE|ALTER\s+TABLE)/i,
+      json: /^\s*[\{\[].*[\}\]]\s*$/s, // 确保匹配多行
+      yaml: /(?:^[\s]*[\w-]+\s*:\s*(?:[^\r\n]+|$))/m,
+      markdown:
+        /(?:^#{1,6}\s+|^\s*[\*\-\+]\s+|^\s*\d+\.\s+|\[.+\]\(.+\)|`{1,3}[\s\S]*?`{1,3})/m,
+      xml: /(?:<\?xml|<\/?\w+(?:\s+\w+(?:\s*=\s*(?:"[^"]*"|'[^']*'))?)*\s*\/?>)/i,
+      shell:
+        /(?:^[\s]*[$#]\s*|grep\s+|find\s+|awk\s+|sed\s+|chmod\s+|sudo\s+|apt\s+install|npm\s+install)/m,
+      php: /(?:<\?php|\$\w+\s*=|function\s+\w+\s*\(|echo\s+|require_once|include_once)/i,
+      ruby: /(?:def\s+\w+|class\s+\w+|require\s+|puts\s+|end$|\.each\s+do)/i,
+      go: /(?:package\s+\w+|import\s+\(|func\s+\w+|var\s+\w+\s+\w+|fmt\.Print)/i,
+      rust: /(?:fn\s+\w+|let\s+mut\s+|println!|use\s+std::|struct\s+\w+|impl\s+\w+)/i,
+      swift:
+        /(?:func\s+\w+|var\s+\w+:\s*\w+|let\s+\w+\s*=|import\s+\w+|class\s+\w+:\s*\w+)/i,
+      kotlin:
+        /(?:fun\s+\w+|val\s+\w+\s*=|var\s+\w+:\s*\w+|class\s+\w+|import\s+\w+)/i,
+    };
+
+    const codeIndicators = [
+      /{\s*[\r\n][\s\S]*?[\r\n]\s*}/,
+      /[\w\s]*\([^)]*\)\s*{/,
+      /\w+\s*=\s*[^;]+;/,
+      /if\s*\([^)]+\)\s*{/,
+      /for\s*\([^)]*\)\s*{/,
+      /\/\/.*$|\/\*[\s\S]*?\*\//m,
+      /^\s*[\w-]+:\s*[^;\r\n]+;?\s*$/m,
+      /^\s*<[\w\s="'-\/]+>\s*$/m,
+    ];
+
+    for (const [language, pattern] of Object.entries(languagePatterns)) {
+      if (pattern.test(text)) {
+        return language;
+      }
+    }
+
+    let codeScore = 0;
+    for (const pattern of codeIndicators) {
+      if (pattern.test(text)) {
+        codeScore++;
+      }
+    }
+    // 降低通用代码的判断阈值，或者增加更多通用指示器
+    if (codeScore >= 1 && text.length > 20) {
+      // 例如：至少一个通用指示器且文本长度大于20
+      return "code";
+    }
+
+    return null;
+  };
+
   const handlePaste = useCallback(
     async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
-      const currentModel = chatStore.currentSession().mask.modelConfig.model;
-      if (!isVisionModel(currentModel)) {
-        return;
-      }
       const items = (event.clipboardData || window.clipboardData).items;
-      for (const item of items) {
-        if (item.kind === "file" && item.type.startsWith("image/")) {
-          event.preventDefault();
+      const newFilesToProcess: File[] = [];
+      let plainTextItemFound = false;
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.kind === "file") {
           const file = item.getAsFile();
           if (file) {
-            const images: string[] = [];
-            images.push(...attachImages);
-            images.push(
-              ...(await new Promise<string[]>((res, rej) => {
-                setUploading(true);
-                const imagesData: string[] = [];
-                uploadImageRemote(file)
-                  .then((dataUrl) => {
-                    imagesData.push(dataUrl);
-                    setUploading(false);
-                    res(imagesData);
-                  })
-                  .catch((e) => {
-                    setUploading(false);
-                    rej(e);
-                  });
-              })),
-            );
-            const imagesLength = images.length;
-
-            if (imagesLength > 3) {
-              images.splice(3, imagesLength - 3);
-            }
-            setAttachImages(images);
+            newFilesToProcess.push(file);
           }
+        } else if (
+          item.kind === "string" &&
+          item.type.startsWith("text/plain")
+        ) {
+          plainTextItemFound = true;
+        }
+      }
+
+      if (newFilesToProcess.length > 0) {
+        event.preventDefault();
+        setUploading(true);
+        const dataUrlPromises: Promise<string>[] = [];
+
+        for (const file of newFilesToProcess) {
+          if (file.type.startsWith("image/")) {
+            // 处理图片文件
+            dataUrlPromises.push(uploadImageRemote(file));
+          } else if (
+            file.name.endsWith(".xlsx") ||
+            file.name.endsWith(".xls") ||
+            file.type === "application/vnd.ms-excel" ||
+            file.type ===
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          ) {
+            // --- 处理 Excel 文件 ---
+            const promise = new Promise<string>((resolveFile, rejectFile) => {
+              const reader = new FileReader();
+              reader.onload = (e) => {
+                try {
+                  const arrayBuffer = e.target?.result as ArrayBuffer;
+                  const workbook = XLSX.read(arrayBuffer, { type: "array" });
+                  let fullTextContent = "";
+
+                  workbook.SheetNames.forEach((sheetName) => {
+                    const worksheet = workbook.Sheets[sheetName];
+                    // XLSX.utils.sheet_to_txt 会将单元格内容用制表符分隔，行用换行符分隔
+                    const sheetText = XLSX.utils.sheet_to_txt(worksheet, {
+                      FS: "\t",
+                      RS: "\n",
+                    });
+                    fullTextContent += `--- Sheet: ${sheetName} ---\n${sheetText}\n\n`;
+                  });
+
+                  if (fullTextContent.trim() === "") {
+                    fullTextContent = "[Empty Excel File]";
+                  }
+
+                  // 将提取的文本内容编码为 Base64 Data URL
+                  const mimeType = "text/plain"; // 我们发送的是纯文本内容
+                  const utf8Encoder = new TextEncoder();
+                  const uint8Array = utf8Encoder.encode(fullTextContent);
+                  let binaryString = "";
+                  for (let j = 0; j < uint8Array.length; j++) {
+                    binaryString += String.fromCharCode(uint8Array[j]);
+                  }
+                  const base64Encoded = btoa(binaryString);
+                  resolveFile(
+                    `data:${mimeType};name=${encodeURIComponent(
+                      file.name,
+                    )};base64,${base64Encoded}`,
+                  );
+                } catch (err) {
+                  console.error(
+                    "Error processing pasted Excel file:",
+                    file.name,
+                    err,
+                  );
+                  rejectFile(
+                    new Error(
+                      `Error processing Excel file ${file.name}: ${
+                        (err as Error).message
+                      }`,
+                    ),
+                  );
+                }
+              };
+              reader.onerror = (err) => {
+                console.error(
+                  "Error reading pasted Excel file:",
+                  file.name,
+                  err,
+                );
+                rejectFile(new Error(`Error reading Excel file ${file.name}`));
+              };
+              reader.readAsArrayBuffer(file); // <--- 读取为 ArrayBuffer 给 SheetJS
+            });
+            dataUrlPromises.push(promise);
+          } else {
+            // 处理其他文本文件
+            const promise = new Promise<string>((resolveFile, rejectFile) => {
+              const reader = new FileReader();
+              reader.onload = (e) => {
+                try {
+                  const textContentFromFile = e.target?.result as string;
+                  const mimeType = file.type || "application/octet-stream";
+                  const utf8Encoder = new TextEncoder();
+                  const uint8Array = utf8Encoder.encode(textContentFromFile);
+                  let binaryString = "";
+                  for (let j = 0; j < uint8Array.length; j++) {
+                    binaryString += String.fromCharCode(uint8Array[j]);
+                  }
+                  const base64Encoded = btoa(binaryString);
+                  resolveFile(
+                    `data:${mimeType};name=${encodeURIComponent(
+                      file.name,
+                    )};base64,${base64Encoded}`,
+                  );
+                } catch (err) {
+                  console.error(
+                    "Error processing pasted file to Data URL:",
+                    file.name,
+                    err,
+                  );
+                  rejectFile(
+                    new Error(
+                      `Error processing pasted file ${file.name}: ${
+                        (err as Error).message
+                      }`,
+                    ),
+                  );
+                }
+              };
+              reader.onerror = (err) => {
+                console.error("Error reading pasted file:", file.name, err);
+                rejectFile(new Error(`Error reading pasted file ${file.name}`));
+              };
+              reader.readAsText(file);
+            });
+            dataUrlPromises.push(promise);
+          }
+        }
+
+        try {
+          const resolvedDataUrls = await Promise.all(dataUrlPromises);
+          const currentAttachImages = [...attachImages];
+          currentAttachImages.push(...resolvedDataUrls.filter((url) => url));
+
+          const MAX_ATTACHMENTS = 3;
+          if (currentAttachImages.length > MAX_ATTACHMENTS) {
+            currentAttachImages.splice(
+              MAX_ATTACHMENTS,
+              currentAttachImages.length - MAX_ATTACHMENTS,
+            );
+            showToast(
+              Locale.Chat.AttachmentLimitExceeded ||
+                `Cannot attach more than ${MAX_ATTACHMENTS} files.`,
+            );
+          }
+          setAttachImages(currentAttachImages);
+
+          // 根据文件类型显示不同的提示信息
+          const excelFileCount = newFilesToProcess.filter(
+            (file) =>
+              file.name.endsWith(".xlsx") ||
+              file.name.endsWith(".xls") ||
+              file.type === "application/vnd.ms-excel" ||
+              file.type ===
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          ).length;
+
+          if (excelFileCount > 0) {
+            showToast(
+              `Successfully processed ${excelFileCount} Excel file(s).`,
+            );
+          } else {
+            showToast("Files have been attached successfully.");
+          }
+        } catch (error) {
+          console.error("Error processing pasted files:", error);
+          showToast(
+            Locale.Chat.UploadFileError || "Error processing pasted files.",
+          );
+        } finally {
+          setUploading(false);
+        }
+      } else if (plainTextItemFound) {
+        event.preventDefault();
+
+        const pastedTextContent = await new Promise<string>((resolve) => {
+          for (let i = 0; i < items.length; i++) {
+            if (
+              items[i].kind === "string" &&
+              items[i].type.startsWith("text/plain")
+            ) {
+              items[i].getAsString(resolve);
+              return;
+            }
+          }
+          resolve("");
+        });
+
+        if (!pastedTextContent) return;
+
+        const detectedLanguage = detectCodeLanguage(pastedTextContent);
+        const TEXT_TO_FILE_THRESHOLD = 3000; // 长文本转文件的阈值
+        const CODE_TO_MARKDOWN_MIN_LENGTH = 10; // 代码转 markdown 的最小长度，避免太短的也转
+
+        if (
+          detectedLanguage &&
+          pastedTextContent.length >= CODE_TO_MARKDOWN_MIN_LENGTH
+        ) {
+          if (pastedTextContent.length > TEXT_TO_FILE_THRESHOLD) {
+            // 长代码：转换为文件
+            setUploading(true);
+            try {
+              const fileExtension =
+                detectedLanguage === "code" ? "txt" : detectedLanguage;
+              const fileName = `pasted_code_${Date.now()}.${fileExtension}`;
+              const mimeType = "text/plain"; // 文件内容本身是文本
+              const utf8Encoder = new TextEncoder();
+              const uint8Array = utf8Encoder.encode(pastedTextContent);
+              let binaryString = "";
+              for (let j = 0; j < uint8Array.length; j++) {
+                binaryString += String.fromCharCode(uint8Array[j]);
+              }
+              const base64Encoded = btoa(binaryString);
+              const dataUrl = `data:${mimeType};name=${encodeURIComponent(
+                fileName,
+              )};base64,${base64Encoded}`;
+
+              const currentAttachImages = [...attachImages];
+              currentAttachImages.push(dataUrl);
+
+              const MAX_ATTACHMENTS = 3;
+              if (currentAttachImages.length > MAX_ATTACHMENTS) {
+                currentAttachImages.splice(
+                  MAX_ATTACHMENTS,
+                  currentAttachImages.length - MAX_ATTACHMENTS,
+                );
+                showToast(
+                  Locale.Chat.AttachmentLimitExceeded ||
+                    `Cannot attach more than ${MAX_ATTACHMENTS} files.`,
+                );
+              }
+              setAttachImages(currentAttachImages);
+              showToast(
+                `Pasted ${detectedLanguage} code was attached as a file.`,
+              );
+            } catch (error) {
+              console.error("Error converting pasted code to file:", error);
+              showToast(
+                Locale.Chat.UploadFileError || "Error processing pasted code.",
+              );
+            } finally {
+              setUploading(false);
+            }
+          } else {
+            // 短代码：用 markdown 格式插入到输入框
+            const languageHint =
+              detectedLanguage === "code" ? "" : detectedLanguage;
+            const markdownCode = `\`\`\`${languageHint}\n${pastedTextContent}\n\`\`\``;
+
+            const target = event.target as HTMLTextAreaElement;
+            const currentValue = target.value;
+            const selectionStart = target.selectionStart;
+            const selectionEnd = target.selectionEnd;
+
+            const newValue =
+              currentValue.slice(0, selectionStart) +
+              markdownCode +
+              currentValue.slice(selectionEnd);
+
+            setUserInput(newValue);
+
+            setTimeout(() => {
+              if (inputRef.current) {
+                const newCursorPosition = selectionStart + markdownCode.length;
+                inputRef.current.setSelectionRange(
+                  newCursorPosition,
+                  newCursorPosition,
+                );
+                inputRef.current.focus();
+              }
+            }, 0);
+
+            showToast(`Pasted ${detectedLanguage} code formatted as markdown.`);
+          }
+        } else if (pastedTextContent.length > TEXT_TO_FILE_THRESHOLD) {
+          // 非代码的长文本：转换为文件
+          setUploading(true);
+          try {
+            const fileName = `pasted_text_${Date.now()}.txt`;
+            const mimeType = "text/plain";
+            const utf8Encoder = new TextEncoder();
+            const uint8Array = utf8Encoder.encode(pastedTextContent);
+            let binaryString = "";
+            for (let j = 0; j < uint8Array.length; j++) {
+              binaryString += String.fromCharCode(uint8Array[j]);
+            }
+            const base64Encoded = btoa(binaryString);
+            const dataUrl = `data:${mimeType};name=${encodeURIComponent(
+              fileName,
+            )};base64,${base64Encoded}`;
+
+            const currentAttachImages = [...attachImages];
+            currentAttachImages.push(dataUrl);
+
+            const MAX_ATTACHMENTS = 3;
+            if (currentAttachImages.length > MAX_ATTACHMENTS) {
+              currentAttachImages.splice(
+                MAX_ATTACHMENTS,
+                currentAttachImages.length - MAX_ATTACHMENTS,
+              );
+              showToast(
+                Locale.Chat.AttachmentLimitExceeded ||
+                  `Cannot attach more than ${MAX_ATTACHMENTS} files.`,
+              );
+            }
+            setAttachImages(currentAttachImages);
+            showToast(
+              Locale.Chat.PastedTextAsFile ||
+                "Pasted text was attached as a file.",
+            );
+          } catch (error) {
+            console.error("Error converting pasted text to file:", error);
+            showToast(
+              Locale.Chat.UploadFileError || "Error processing pasted text.",
+            );
+          } finally {
+            setUploading(false);
+          }
+        } else {
+          // 短的非代码文本：手动插入到输入框
+          const target = event.target as HTMLTextAreaElement;
+          const currentValue = target.value;
+          const selectionStart = target.selectionStart;
+          const selectionEnd = target.selectionEnd;
+
+          const newValue =
+            currentValue.slice(0, selectionStart) +
+            pastedTextContent +
+            currentValue.slice(selectionEnd);
+
+          setUserInput(newValue);
+
+          setTimeout(() => {
+            if (inputRef.current) {
+              const newCursorPosition =
+                selectionStart + pastedTextContent.length;
+              inputRef.current.setSelectionRange(
+                newCursorPosition,
+                newCursorPosition,
+              );
+              inputRef.current.focus();
+            }
+          }, 0);
         }
       }
     },
-    [attachImages, chatStore],
+    [
+      attachImages,
+      setAttachImages,
+      setUploading,
+      Locale,
+      inputRef,
+      setUserInput,
+    ],
   );
 
-  async function uploadImage() {
-    const images: string[] = [];
-    images.push(...attachImages);
+  const getAttachmentInfo = (
+    dataUrl: string,
+  ): {
+    isImage: boolean;
+    name: string;
+    url: string;
+    isTextFile: boolean;
+    fileExtension: string;
+  } => {
+    let isImage = false;
+    let name = "unknown_file";
+    let isTextFile = false;
+    let fileExtension = "";
 
-    images.push(
-      ...(await new Promise<string[]>((res, rej) => {
-        const fileInput = document.createElement("input");
-        fileInput.type = "file";
-        fileInput.accept =
-          "image/png, image/jpeg, image/webp, image/heic, image/heif";
-        fileInput.multiple = true;
-        fileInput.onchange = (event: any) => {
-          setUploading(true);
-          const files = event.target.files;
-          const imagesData: string[] = [];
-          for (let i = 0; i < files.length; i++) {
-            const file = event.target.files[i];
-            uploadImageRemote(file)
-              .then((dataUrl) => {
-                imagesData.push(dataUrl);
-                if (
-                  imagesData.length === 3 ||
-                  imagesData.length === files.length
-                ) {
-                  setUploading(false);
-                  res(imagesData);
-                }
-              })
-              .catch((e) => {
-                setUploading(false);
-                rej(e);
-              });
+    const imageExtensions = /\.(jpeg|jpg|gif|png|webp|svg|heic|heif)$/i;
+    const textFileExtensionsByName =
+      /\.(txt|c|cpp|h|java|py|md|json|xml|html|css|js|ts|sh|bat)$/i;
+
+    const extractExtension = (filename: string): string => {
+      const lastDot = filename.lastIndexOf(".");
+      if (lastDot === -1 || lastDot === 0 || lastDot === filename.length - 1) {
+        return "";
+      }
+      return filename.substring(lastDot + 1).toLowerCase();
+    };
+
+    if (dataUrl.startsWith("data:")) {
+      const dataUrlParts = dataUrl.substring(5).split(";");
+      const mimeType = dataUrlParts[0].toLowerCase();
+      let parsedNameFromDataUrl = "";
+
+      for (const part of dataUrlParts) {
+        if (part.startsWith("name=")) {
+          try {
+            parsedNameFromDataUrl = decodeURIComponent(part.substring(5));
+            break;
+          } catch (e) {
+            console.error(
+              "Error decoding filename from data: URL part",
+              part,
+              e,
+            );
           }
-        };
-        fileInput.click();
-      })),
-    );
+        }
+      }
+      name = parsedNameFromDataUrl || "attachment";
+      fileExtension = extractExtension(name);
 
-    const imagesLength = images.length;
-    if (imagesLength > 3) {
-      images.splice(3, imagesLength - 3);
+      if (mimeType.startsWith("image/")) {
+        isImage = true;
+        if (!parsedNameFromDataUrl) name = "image_data_attachment";
+      } else if (mimeType.startsWith("text/")) {
+        isTextFile = true;
+        if (!parsedNameFromDataUrl) name = "text_data_attachment";
+      } else if (
+        mimeType === "application/octet-stream" &&
+        parsedNameFromDataUrl &&
+        textFileExtensionsByName.test(parsedNameFromDataUrl)
+      ) {
+        isTextFile = true;
+      } else if (
+        parsedNameFromDataUrl &&
+        textFileExtensionsByName.test(parsedNameFromDataUrl)
+      ) {
+        isTextFile = true;
+      }
+
+      if (isImage) {
+        isTextFile = false;
+      }
+    } else if (
+      dataUrl.startsWith("http:") ||
+      dataUrl.startsWith("https://") ||
+      dataUrl.startsWith("blob:")
+    ) {
+      try {
+        const urlObj = new URL(dataUrl);
+        const pathParts = urlObj.pathname.split("/");
+        const potentialName = decodeURIComponent(
+          pathParts[pathParts.length - 1],
+        );
+        if (potentialName) {
+          name = potentialName;
+        } else if (dataUrl.startsWith("blob:")) {
+          name = "blob_attachment";
+        } else {
+          name = "url_attachment";
+        }
+      } catch (e) {
+        const simpleParts = dataUrl.split("/");
+        const lastSegment = simpleParts[simpleParts.length - 1];
+        try {
+          name =
+            decodeURIComponent(lastSegment.split("?")[0].split("#")[0]) ||
+            (dataUrl.startsWith("blob:")
+              ? "blob_attachment"
+              : "url_attachment");
+        } catch (decodeError) {
+          name = dataUrl.startsWith("blob:")
+            ? "blob_attachment"
+            : "url_attachment";
+          console.error(
+            "Error decoding filename from URL segment",
+            lastSegment,
+            decodeError,
+          );
+        }
+      }
+      fileExtension = extractExtension(name);
+
+      if (imageExtensions.test(name) || imageExtensions.test(dataUrl)) {
+        isImage = true;
+      }
+      if (!isImage && textFileExtensionsByName.test(name)) {
+        isTextFile = true;
+      }
     }
-    setAttachImages(images);
+
+    return { isImage, name, url: dataUrl, isTextFile, fileExtension };
+  };
+
+  async function uploadImage() {
+    const currentAttachImages = [...attachImages]; // 使用 useState 的 attachImages
+
+    try {
+      const selectedFilesDataUrls = await new Promise<string[]>(
+        (resolve, reject) => {
+          const fileInput = document.createElement("input");
+          fileInput.type = "file";
+          fileInput.accept =
+            "image/png, image/jpeg, image/webp, image/heic, image/heif, .txt, .c, .cpp, .h, .java, .py, .md, .json, .xml, .html, .css, .js, .ts, .sh, .bat, text/plain, application/octet-stream, .xlsx, .xls, application/vnd.ms-excel, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+          fileInput.multiple = true;
+
+          fileInput.onchange = async (event: any) => {
+            setUploading(true);
+            const files = event.target.files;
+            if (!files || files.length === 0) {
+              setUploading(false);
+              resolve([]);
+              return;
+            }
+
+            const fileProcessingPromises: Promise<string>[] = [];
+
+            for (let i = 0; i < files.length; i++) {
+              const file = files[i] as File; // 类型断言
+              if (file.type.startsWith("image/")) {
+                fileProcessingPromises.push(uploadImageRemote(file));
+              } else if (
+                file.name.endsWith(".xlsx") ||
+                file.name.endsWith(".xls") ||
+                file.type === "application/vnd.ms-excel" ||
+                file.type ===
+                  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              ) {
+                // --- 处理 Excel 文件 ---
+                const promise = new Promise<string>(
+                  (resolveFile, rejectFile) => {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                      try {
+                        const arrayBuffer = e.target?.result as ArrayBuffer;
+                        const workbook = XLSX.read(arrayBuffer, {
+                          type: "array",
+                        });
+                        let fullTextContent = "";
+
+                        workbook.SheetNames.forEach((sheetName) => {
+                          const worksheet = workbook.Sheets[sheetName];
+                          // XLSX.utils.sheet_to_txt 会将单元格内容用制表符分隔，行用换行符分隔
+                          const sheetText = XLSX.utils.sheet_to_txt(worksheet, {
+                            FS: "\t",
+                            RS: "\n",
+                          });
+                          fullTextContent += `--- Sheet: ${sheetName} ---\n${sheetText}\n\n`;
+                        });
+
+                        if (fullTextContent.trim() === "") {
+                          fullTextContent = "[Empty Excel File]";
+                        }
+
+                        // 将提取的文本内容编码为 Base64 Data URL
+                        const mimeType = "text/plain"; // 我们发送的是纯文本内容
+                        const utf8Encoder = new TextEncoder();
+                        const uint8Array = utf8Encoder.encode(fullTextContent);
+                        let binaryString = "";
+                        for (let j = 0; j < uint8Array.length; j++) {
+                          binaryString += String.fromCharCode(uint8Array[j]);
+                        }
+                        const base64Encoded = btoa(binaryString);
+                        resolveFile(
+                          `data:${mimeType};name=${encodeURIComponent(
+                            file.name,
+                          )};base64,${base64Encoded}`,
+                        );
+                      } catch (err) {
+                        console.error(
+                          "Error processing Excel file:",
+                          file.name,
+                          err,
+                        );
+                        rejectFile(
+                          new Error(
+                            `Error processing Excel file ${file.name}: ${
+                              (err as Error).message
+                            }`,
+                          ),
+                        );
+                      }
+                    };
+                    reader.onerror = (err) => {
+                      console.error(
+                        "Error reading Excel file:",
+                        file.name,
+                        err,
+                      );
+                      rejectFile(
+                        new Error(`Error reading Excel file ${file.name}`),
+                      );
+                    };
+                    reader.readAsArrayBuffer(file); // <--- 读取为 ArrayBuffer 给 SheetJS
+                  },
+                );
+                fileProcessingPromises.push(promise);
+              } else {
+                // 其他文本文件等按原逻辑处理
+                const promise = new Promise<string>(
+                  (resolveFile, rejectFile) => {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                      try {
+                        const textContentFromFile = e.target?.result as string;
+                        const mimeType =
+                          file.type || "application/octet-stream";
+                        const utf8Encoder = new TextEncoder();
+                        const uint8Array =
+                          utf8Encoder.encode(textContentFromFile);
+                        let binaryString = "";
+                        for (let j = 0; j < uint8Array.length; j++) {
+                          binaryString += String.fromCharCode(uint8Array[j]);
+                        }
+                        const base64Encoded = btoa(binaryString);
+                        resolveFile(
+                          `data:${mimeType};name=${encodeURIComponent(
+                            file.name,
+                          )};base64,${base64Encoded}`,
+                        );
+                      } catch (err) {
+                        /* ... */
+                      }
+                    };
+                    reader.onerror = (err) => {
+                      /* ... */
+                    };
+                    reader.readAsText(file);
+                  },
+                );
+                fileProcessingPromises.push(promise);
+              }
+            }
+
+            try {
+              const dataUrls = await Promise.all(fileProcessingPromises);
+              resolve(dataUrls.filter((url) => url));
+            } catch (error) {
+              console.error(
+                "Error processing one or more files in uploadImage promise:",
+                error,
+              );
+              showToast(
+                Locale.Chat.UploadFileError || "Error processing files.",
+              );
+              reject(error);
+            } finally {
+              setUploading(false);
+            }
+          };
+          fileInput.onerror = (errEvent) => {
+            setUploading(false);
+            console.error("File input error:", errEvent);
+            reject(new Error("File input failed"));
+          };
+          fileInput.click();
+        },
+      );
+
+      const allSelectedDataUrls = [
+        ...currentAttachImages,
+        ...selectedFilesDataUrls,
+      ];
+      const MAX_ATTACHMENTS = 5;
+      if (allSelectedDataUrls.length > MAX_ATTACHMENTS) {
+        allSelectedDataUrls.splice(
+          MAX_ATTACHMENTS,
+          allSelectedDataUrls.length - MAX_ATTACHMENTS,
+        );
+        showToast(
+          Locale.Chat.AttachmentLimitExceeded ||
+            `Cannot attach more than ${MAX_ATTACHMENTS} files.`,
+        );
+      }
+      setAttachImages(allSelectedDataUrls);
+    } catch (error) {
+      console.error(
+        "File selection or initial processing failed in uploadImage:",
+        error,
+      );
+      setUploading(false);
+      showToast(Locale.Chat.UploadFileError || "Error during file selection.");
+    }
   }
 
   // 快捷键 shortcut keys
@@ -1780,265 +2594,323 @@ function _Chat() {
                 setAutoScroll(false);
               }}
             >
-              {messages
-                // TODO
-                // .filter((m) => !m.isMcpResponse)
-                .map((message, i) => {
-                  const isUser = message.role === "user";
-                  const isContext = i < context.length;
-                  const showActions =
-                    i > 0 &&
-                    !(message.preview || message.content.length === 0) &&
-                    !isContext;
-                  const showTyping = message.preview || message.streaming;
+              {messages.map((message, i) => {
+                const isUser = message.role === "user";
+                const isContext = i < context.length; // context 是 useMemo 计算出来的
+                const showActions =
+                  i > 0 && // 条件1: 必须不是第一条消息 (索引大于0)
+                  !message.preview && // 条件2: 消息不能是预览消息
+                  (getMessageTextContent(message).length > 0 ||
+                    (message.attachments && message.attachments.length > 0)); // 条件3: 消息必须有文本内容或附件
+                // console.log(
+                //   `Message ID: ${message.id}, Index: ${i}, Role: ${message.role}`,
+                //   `Is Preview: ${message.preview}`,
+                //   `Is Streaming: ${message.streaming}`,
+                //   `Is Context: ${isContext}`,
+                //   `Text Content Length: ${getMessageTextContent(message).length}`,
+                //   `Attachments Length: ${message.attachments?.length || 0}`,
+                //   `Calculated showActions: ${showActions}`
+                // );
+                const showTyping = message.preview || message.streaming;
 
-                  const shouldShowClearContextDivider =
-                    i === clearContextIndex - 1;
+                const shouldShowClearContextDivider =
+                  i === clearContextIndex - 1;
 
-                  return (
-                    <Fragment key={message.id}>
-                      <div
-                        className={
-                          isUser
-                            ? styles["chat-message-user"]
-                            : styles["chat-message"]
-                        }
-                      >
-                        <div className={styles["chat-message-container"]}>
-                          <div className={styles["chat-message-header"]}>
-                            <div className={styles["chat-message-avatar"]}>
-                              <div className={styles["chat-message-edit"]}>
-                                <IconButton
-                                  icon={<EditIcon />}
-                                  aria={Locale.Chat.Actions.Edit}
-                                  onClick={async () => {
-                                    const newMessage = await showPrompt(
-                                      Locale.Chat.Actions.Edit,
-                                      getMessageTextContent(message),
-                                      10,
-                                    );
-                                    let newContent:
-                                      | string
-                                      | MultimodalContent[] = newMessage;
-                                    const images = getMessageImages(message);
-                                    if (images.length > 0) {
-                                      newContent = [
-                                        { type: "text", text: newMessage },
-                                      ];
-                                      for (let i = 0; i < images.length; i++) {
-                                        newContent.push({
-                                          type: "image_url",
-                                          image_url: {
-                                            url: images[i],
-                                          },
-                                        });
-                                      }
-                                    }
-                                    chatStore.updateTargetSession(
-                                      session,
-                                      (session) => {
-                                        const m = session.mask.context
-                                          .concat(session.messages)
-                                          .find((m) => m.id === message.id);
-                                        if (m) {
-                                          m.content = newContent;
+                return (
+                  <Fragment key={message.id || `msg-${i}`}>
+                    {" "}
+                    {/* 确保有 key */}
+                    <div
+                      className={
+                        isUser
+                          ? styles["chat-message-user"]
+                          : styles["chat-message"]
+                      }
+                    >
+                      <div className={styles["chat-message-container"]}>
+                        <div className={styles["chat-message-header"]}>
+                          {/* ... (头像, 编辑按钮, 模型名称等头部信息保持不变) ... */}
+                          <div className={styles["chat-message-avatar"]}>
+                            <div className={styles["chat-message-edit"]}>
+                              <IconButton
+                                icon={<EditIcon />}
+                                aria={Locale.Chat.Actions.Edit}
+                                onClick={async () => {
+                                  // ... (编辑消息逻辑) ...
+                                  // 注意：如果编辑消息时也允许修改附件，这里的逻辑会更复杂
+                                  const newMessageContent = await showPrompt(
+                                    Locale.Chat.Actions.Edit,
+                                    getMessageTextContent(message), // 只编辑文本部分
+                                    10,
+                                  );
+                                  // 更新消息时，只更新文本内容，保持附件不变
+                                  // 或者提供更复杂的附件编辑界面
+                                  chatStore.updateTargetSession(
+                                    session,
+                                    (s) => {
+                                      const msgToUpdate = s.mask.context
+                                        .concat(s.messages)
+                                        .find((m) => m.id === message.id);
+                                      if (msgToUpdate) {
+                                        if (
+                                          typeof msgToUpdate.content ===
+                                          "string"
+                                        ) {
+                                          msgToUpdate.content =
+                                            newMessageContent;
+                                        } else {
+                                          // Multimodal content
+                                          const textPart =
+                                            msgToUpdate.content.find(
+                                              (p) => p.type === "text",
+                                            );
+                                          if (textPart) {
+                                            textPart.text = newMessageContent;
+                                          } else {
+                                            // 如果没有文本部分，可能需要添加一个新的文本部分
+                                            // 或者决定如何处理这种情况
+                                            (
+                                              msgToUpdate.content as MultimodalContent[]
+                                            ).unshift({
+                                              type: "text",
+                                              text: newMessageContent,
+                                            });
+                                          }
                                         }
-                                      },
-                                    );
-                                  }}
-                                ></IconButton>
-                              </div>
-                              {isUser ? (
-                                <Avatar avatar={config.avatar} />
-                              ) : (
-                                <>
-                                  {["system"].includes(message.role) ? (
-                                    <Avatar avatar="2699-fe0f" />
-                                  ) : (
-                                    <MaskAvatar
-                                      avatar={session.mask.avatar}
-                                      model={
-                                        message.model ||
-                                        session.mask.modelConfig.model
                                       }
-                                    />
-                                  )}
-                                </>
-                              )}
+                                    },
+                                  );
+                                }}
+                              ></IconButton>
                             </div>
-                            {!isUser && (
+                            {isUser ? (
+                              <Avatar avatar={config.avatar} />
+                            ) : (
+                              <>
+                                {["system"].includes(message.role) ? (
+                                  <Avatar avatar="2699-fe0f" />
+                                ) : (
+                                  <MaskAvatar
+                                    avatar={session.mask.avatar}
+                                    model={
+                                      message.model ||
+                                      session.mask.modelConfig.model
+                                    }
+                                  />
+                                )}
+                              </>
+                            )}
+                          </div>
+                          {!isUser &&
+                            message.model && ( // 确保 message.model 存在
                               <div className={styles["chat-model-name"]}>
                                 {message.model}
                               </div>
                             )}
-
-                            {showActions && (
-                              <div className={styles["chat-message-actions"]}>
-                                <div className={styles["chat-input-actions"]}>
-                                  {message.streaming ? (
+                          {showActions && (
+                            <div className={styles["chat-message-actions"]}>
+                              <div className={styles["chat-input-actions"]}>
+                                {message.streaming ? (
+                                  <ChatAction
+                                    text={Locale.Chat.Actions.Stop}
+                                    icon={<StopIcon />}
+                                    onClick={() => onUserStop(message.id ?? i)}
+                                  />
+                                ) : (
+                                  <>
                                     <ChatAction
-                                      text={Locale.Chat.Actions.Stop}
-                                      icon={<StopIcon />}
+                                      text={Locale.Chat.Actions.Retry}
+                                      icon={<ResetIcon />}
+                                      onClick={() => onResend(message)}
+                                    />
+
+                                    <ChatAction
+                                      text={Locale.Chat.Actions.Delete}
+                                      icon={<DeleteIcon />}
+                                      onClick={() => onDelete(message.id ?? i)}
+                                    />
+
+                                    <ChatAction
+                                      text={Locale.Chat.Actions.Pin}
+                                      icon={<PinIcon />}
+                                      onClick={() => onPinMessage(message)}
+                                    />
+
+                                    <ChatAction
+                                      text={Locale.Chat.Actions.Copy}
+                                      icon={<CopyIcon />}
                                       onClick={() =>
-                                        onUserStop(message.id ?? i)
+                                        copyToClipboard(
+                                          getMessageTextContent(message),
+                                        )
                                       }
                                     />
-                                  ) : (
-                                    <>
-                                      <ChatAction
-                                        text={Locale.Chat.Actions.Retry}
-                                        icon={<ResetIcon />}
-                                        onClick={() => onResend(message)}
-                                      />
 
+                                    {config.ttsConfig.enable && (
                                       <ChatAction
-                                        text={Locale.Chat.Actions.Delete}
-                                        icon={<DeleteIcon />}
-                                        onClick={() =>
-                                          onDelete(message.id ?? i)
+                                        text={
+                                          speechStatus
+                                            ? Locale.Chat.Actions.StopSpeech
+                                            : Locale.Chat.Actions.Speech
                                         }
-                                      />
-
-                                      <ChatAction
-                                        text={Locale.Chat.Actions.Pin}
-                                        icon={<PinIcon />}
-                                        onClick={() => onPinMessage(message)}
-                                      />
-                                      <ChatAction
-                                        text={Locale.Chat.Actions.Copy}
-                                        icon={<CopyIcon />}
+                                        icon={
+                                          speechStatus ? (
+                                            <SpeakStopIcon />
+                                          ) : (
+                                            <SpeakIcon />
+                                          )
+                                        }
                                         onClick={() =>
-                                          copyToClipboard(
+                                          openaiSpeech(
                                             getMessageTextContent(message),
                                           )
                                         }
                                       />
-                                      {config.ttsConfig.enable && (
-                                        <ChatAction
-                                          text={
-                                            speechStatus
-                                              ? Locale.Chat.Actions.StopSpeech
-                                              : Locale.Chat.Actions.Speech
-                                          }
-                                          icon={
-                                            speechStatus ? (
-                                              <SpeakStopIcon />
-                                            ) : (
-                                              <SpeakIcon />
-                                            )
-                                          }
-                                          onClick={() =>
-                                            openaiSpeech(
-                                              getMessageTextContent(message),
-                                            )
-                                          }
-                                        />
-                                      )}
-                                    </>
-                                  )}
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                          {message?.tools?.length == 0 && showTyping && (
-                            <div className={styles["chat-message-status"]}>
-                              {Locale.Chat.Typing}
-                            </div>
-                          )}
-                          {/*@ts-ignore*/}
-                          {message?.tools?.length > 0 && (
-                            <div className={styles["chat-message-tools"]}>
-                              {message?.tools?.map((tool) => (
-                                <div
-                                  key={tool.id}
-                                  title={tool?.errorMsg}
-                                  className={styles["chat-message-tool"]}
-                                >
-                                  {tool.isError === false ? (
-                                    <ConfirmIcon />
-                                  ) : tool.isError === true ? (
-                                    <CloseIcon />
-                                  ) : (
-                                    <LoadingButtonIcon />
-                                  )}
-                                  <span>{tool?.function?.name}</span>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                          <div className={styles["chat-message-item"]}>
-                            <Markdown
-                              key={message.streaming ? "loading" : "done"}
-                              content={getMessageTextContent(message)}
-                              loading={
-                                (message.preview || message.streaming) &&
-                                message.content.length === 0 &&
-                                !isUser
-                              }
-                              //   onContextMenu={(e) => onRightClick(e, message)} // hard to use
-                              onDoubleClickCapture={() => {
-                                if (!isMobileScreen) return;
-                                setUserInput(getMessageTextContent(message));
-                              }}
-                              fontSize={fontSize}
-                              fontFamily={fontFamily}
-                              parentRef={scrollRef}
-                              defaultShow={i >= messages.length - 6}
-                            />
-                            {getMessageImages(message).length == 1 && (
-                              <img
-                                className={styles["chat-message-item-image"]}
-                                src={getMessageImages(message)[0]}
-                                alt=""
-                              />
-                            )}
-                            {getMessageImages(message).length > 1 && (
-                              <div
-                                className={styles["chat-message-item-images"]}
-                                style={
-                                  {
-                                    "--image-count":
-                                      getMessageImages(message).length,
-                                  } as React.CSSProperties
-                                }
-                              >
-                                {getMessageImages(message).map(
-                                  (image, index) => {
-                                    return (
-                                      <img
-                                        className={
-                                          styles[
-                                            "chat-message-item-image-multi"
-                                          ]
-                                        }
-                                        key={index}
-                                        src={image}
-                                        alt=""
-                                      />
-                                    );
-                                  },
+                                    )}
+                                  </>
                                 )}
                               </div>
-                            )}
-                          </div>
-                          {message?.audio_url && (
-                            <div className={styles["chat-message-audio"]}>
-                              <audio src={message.audio_url} controls />
                             </div>
                           )}
+                        </div>
 
-                          <div className={styles["chat-message-action-date"]}>
-                            {isContext
-                              ? Locale.Chat.IsContext
-                              : message.date.toLocaleString()}
+                        {message?.tools?.length === 0 && showTyping && (
+                          <div className={styles["chat-message-status"]}>
+                            {Locale.Chat.Typing}
                           </div>
+                        )}
+                        {message?.tools && message.tools.length > 0 && (
+                          <div className={styles["chat-message-tools"]}>
+                            {message?.tools?.map((tool) => (
+                              <div
+                                key={tool.id}
+                                title={tool?.errorMsg}
+                                className={styles["chat-message-tool"]}
+                              >
+                                {tool.isError === false ? (
+                                  <ConfirmIcon />
+                                ) : tool.isError === true ? (
+                                  <CloseIcon />
+                                ) : (
+                                  <LoadingButtonIcon />
+                                )}
+                                <span>{tool?.function?.name}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        <div className={styles["chat-message-item"]}>
+                          <Markdown
+                            key={
+                              message.streaming
+                                ? `md-loading-${message.id}`
+                                : `md-done-${message.id}`
+                            }
+                            content={getMessageTextContent(message)} // 获取消息的主要文本内容
+                            loading={
+                              (message.preview || message.streaming) &&
+                              getMessageTextContent(message).length === 0 && // 只有在内容为空时才显示loading
+                              !isUser
+                            }
+                            fontSize={fontSize}
+                            fontFamily={fontFamily}
+                            parentRef={scrollRef}
+                            defaultShow={i >= messages.length - 6}
+                          />
+
+                          {/* --- 统一渲染所有附件 --- */}
+                          {message.attachments &&
+                            message.attachments.length > 0 && (
+                              <div
+                                className={
+                                  styles["chat-message-attachments-container"]
+                                }
+                              >
+                                {message.attachments.map((att, attIndex) => {
+                                  if (att.type === "image" && att.url) {
+                                    // 渲染图片附件
+                                    // 你可以根据图片数量决定是单张显示还是多张网格显示
+                                    // 这里简化为单张图片渲染，使用已有的样式
+                                    return (
+                                      <img
+                                        key={`msg-${message.id}-att-img-${attIndex}`}
+                                        className={
+                                          styles["chat-message-item-image"]
+                                        } // 或者一个新的特定于附件图片的样式
+                                        src={att.url}
+                                        alt={att.name || "Attached image"}
+                                        onClick={() => {
+                                          /* 可以在这里添加点击放大等交互 */
+                                        }}
+                                      />
+                                    );
+                                  } else if (
+                                    att.type === "textfile" &&
+                                    att.name
+                                  ) {
+                                    // 渲染文本文件附件预览
+                                    // 使用 getAttachmentInfo 再次获取 fileExtension 是为了确保一致性，
+                                    // 或者你可以在 MessageAttachment 接口中直接存储 fileExtension
+                                    const ext =
+                                      att.fileExtension ||
+                                      att.name
+                                        .substring(
+                                          att.name.lastIndexOf(".") + 1,
+                                        )
+                                        .toLowerCase();
+                                    return (
+                                      <div
+                                        key={`msg-${message.id}-att-file-${attIndex}`}
+                                        className={
+                                          styles[
+                                            "chat-message-attachment-preview"
+                                          ]
+                                        }
+                                        title={att.name}
+                                      >
+                                        <FileTextIcon />
+                                        <span
+                                          className={
+                                            styles[
+                                              "chat-message-attachment-name"
+                                            ]
+                                          }
+                                        >
+                                          {att.name}
+                                        </span>
+                                      </div>
+                                    );
+                                  }
+                                  return null;
+                                })}
+                              </div>
+                            )}
+                          {/* --- 统一渲染所有附件结束 --- */}
+                        </div>
+                        {/* End of chat-message-item */}
+
+                        {message?.audio_url && (
+                          <div className={styles["chat-message-audio"]}>
+                            <audio src={message.audio_url} controls />
+                          </div>
+                        )}
+
+                        <div className={styles["chat-message-action-date"]}>
+                          {isContext
+                            ? Locale.Chat.IsContext
+                            : message.date.toLocaleString()}
                         </div>
                       </div>
-                      {shouldShowClearContextDivider && <ClearContextDivider />}
-                    </Fragment>
-                  );
-                })}
+                      {/* End of chat-message-container */}
+                    </div>
+                    {/* End of chat-message or chat-message-user */}
+                    {shouldShowClearContextDivider && <ClearContextDivider />}
+                  </Fragment>
+                );
+              })}
             </div>
+            {/* End of chat-body */}
             <div className={styles["chat-input-panel"]}>
               <PromptHints
                 prompts={promptHints}
@@ -2095,13 +2967,33 @@ function _Chat() {
                 />
                 {attachImages.length != 0 && (
                   <div className={styles["attach-images"]}>
-                    {attachImages.map((image, index) => {
+                    {attachImages.map((dataUrl, index) => {
+                      const { isImage, name, isTextFile } =
+                        getAttachmentInfo(dataUrl);
+                      // console.log("原始 dataUrl:", dataUrl);
+                      // console.log("getAttachmentInfo 返回的 isImage:", isImage);
                       return (
                         <div
                           key={index}
                           className={styles["attach-image"]}
-                          style={{ backgroundImage: `url("${image}")` }}
+                          title={
+                            !isImage && isTextFile ? name : "Image attachment"
+                          }
+                          style={
+                            isImage
+                              ? { backgroundImage: `url("${dataUrl}")` }
+                              : {}
+                          }
                         >
+                          {!isImage && isTextFile && (
+                            <div className={styles["text-file-preview"]}>
+                              {/* You should replace this with an actual SVG icon component */}
+                              <FileTextIcon />
+                              <span className={styles["text-file-name"]}>
+                                {name}
+                              </span>
+                            </div>
+                          )}
                           <div className={styles["attach-image-mask"]}>
                             <DeleteImageButton
                               deleteImage={() => {
@@ -2122,6 +3014,7 @@ function _Chat() {
                   className={styles["chat-input-send"]}
                   type="primary"
                   onClick={() => doSubmit(userInput)}
+                  disabled={isSubmitting || uploading}
                 />
               </label>
             </div>

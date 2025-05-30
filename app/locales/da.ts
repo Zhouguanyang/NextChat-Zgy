@@ -57,6 +57,9 @@ const da: PartialLocaleType = {
       Speech: "Afspil",
       StopSpeech: "Stop",
     },
+    AttachmentLimitExceeded: "Attachment limit exceeded",
+    UploadFileError: "Error processing file(s), please try again.",
+    PastedTextAsFile: "Pasted text has been attached as a file.",
     Commands: {
       new: "Ny chat",
       newm: "Ny chat med persona",
